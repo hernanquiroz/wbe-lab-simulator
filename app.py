@@ -12,12 +12,21 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
-from fpdf import FPDF
+from fpdf import FPDF, XPos, YPos
 from datetime import datetime
 import io
 
-# Alias compatible NumPy 1.x / 2.x
+# Alias compatible NumPy 1.x / 2.x (evita el error de np.trapz)
 trapz = getattr(np, 'trapezoid', None) or np.trapz
+
+# Helper para la API nueva de fpdf2 (elimina DeprecationWarning de "ln")
+def _cell(pdf, w, h, txt="", ln=True, border=0, align=''):
+    if ln:
+        pdf.cell(w, h, txt, border=border, align=align,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    else:
+        pdf.cell(w, h, txt, border=border, align=align,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP)
 
 # ============================================================================
 # BASE DE DATOS DE ANALITOS
@@ -93,17 +102,20 @@ st.sidebar.title("⚙️ Configuración de Laboratorio")
 st.sidebar.markdown("**Equipo Cromatográfico:**")
 hplc_brand = st.sidebar.selectbox(
     "Marca/Modelo",
-    ["Agilent 1260 Infinity II (HPLC-UV)", "Waters Acquity UPLC (LC-MS/MS)", "Shimadzu Nexera (LC-MS/MS)", "Thermo Vanquish (HRMS)"]
+    ["Agilent 1260 Infinity II (HPLC-UV)", "Waters Acquity UPLC (LC-MS/MS)",
+     "Shimadzu Nexera (LC-MS/MS)", "Thermo Vanquish (HRMS)"]
 )
 st.sidebar.markdown("**Cartucho SPE:**")
 spe_cartridge = st.sidebar.selectbox(
     "Tipo de cartucho",
-    ["Oasis HLB 200mg/6cc (Waters)", "Strata-X 200mg/6cc (Phenomenex)", "Bond Elut Plexa 200mg (Agilent)", "Supelclean ENVI-18 (Sigma)"]
+    ["Oasis HLB 200mg/6cc (Waters)", "Strata-X 200mg/6cc (Phenomenex)",
+     "Bond Elut Plexa 200mg (Agilent)", "Supelclean ENVI-18 (Sigma)"]
 )
 st.sidebar.markdown("---")
 seccion = st.sidebar.radio(
     "Navegación:",
-    ["🏠 Inicio", "🎬 SPE Realista", "📊 Cromatograma Multi", "📈 Calibración", "📂 Datos CSV", "🌍 Epidemiología", "📄 Reporte PDF"]
+    ["🏠 Inicio", "🎬 SPE Realista", "📊 Cromatograma Multi", "📈 Calibración",
+     "📂 Datos CSV", "🌍 Epidemiología", "📄 Reporte PDF"]
 )
 
 # ============================================================================
@@ -130,7 +142,7 @@ if seccion == "🏠 Inicio":
     for nombre, info in ANALITOS.items():
         st.markdown(f"""
         <div class="analito-card">
-            <b style="color:{info['color']}">● {nombre}</b> ({info['abrev']}) — t_R ≈ {info['t_r']} min | 
+            <b style="color:{info['color']}">● {nombre}</b> ({info['abrev']}) — t_R ≈ {info['t_r']} min |
             f_excreción = {info['f_excrecion']} | MW = {info['mw']} g/mol<br>
             <i>{info['desc']}</i>
         </div>
@@ -143,221 +155,174 @@ elif seccion == "🎬 SPE Realista":
     st.header("🎬 Simulación Realista de Extracción en Fase Sólida")
     st.info(f"Cartucho: **{spe_cartridge}** | Equipo: **{hplc_brand}**")
 
-    # Selector de analito para la simulación
     analito_spe = st.selectbox("Analito a simular:", list(ANALITOS.keys()), key="analito_spe")
     info_analito = ANALITOS[analito_spe]
 
-    PASOS = ["1. Acondicionamiento", "2. Carga de Muestra", "3. Lavado", "4. Secado", "5. Elución", "6. Concentración"]
+    PASOS = ["1. Acondicionamiento", "2. Carga de Muestra", "3. Lavado",
+             "4. Secado", "5. Elución", "6. Concentración"]
     INFO = {
         "1. Acondicionamiento": {
             "color": "#8e44ad", "vol": 5, "solv": "Metanol → Agua (pH 3)",
             "tiempo": 3, "particulas": False, "flujo": True,
             "nivel_embudo": 0.85, "nivel_cartucho": 0.30,
-            "desc": f"**Objetivo:** Activar sitios hidrofóbicos del cartucho {spe_cartridge.split('(')[0]}.\n\n⚠️ **CRÍTICO:** No dejar secar el cartucho después de este paso. El analito {analito_spe} ({info_analito['abrev']}) requiere fase estacionaria húmeda para retenerse correctamente."
+            "desc": f"**Objetivo:** Activar sitios hidrofóbicos del cartucho {spe_cartridge.split('(')[0]}.\n\n⚠️ **CRÍTICO:** No dejar secar el cartucho. El analito {info_analito['abrev']} requiere fase estacionaria húmeda para retenerse."
         },
         "2. Carga de Muestra": {
             "color": "#7f5539", "vol": 50, "solv": "Agua residual filtrada (pH 3)",
             "tiempo": 8, "particulas": True, "flujo": True,
             "nivel_embudo": 0.85, "nivel_cartucho": 0.55,
-            "desc": f"**Objetivo:** Pasar 50 mL de muestra a 1-2 gotas/seg.\n\nLas moléculas de **{analito_spe}** (● {info_analito['color']}) se adsorben en la fase HLB por interacciones hidrofóbicas y de intercambio iónico."
+            "desc": f"**Objetivo:** Pasar 50 mL de muestra a 1-2 gotas/seg.\n\nLas moléculas de **{info_analito['abrev']}** (●) se adsorben en la fase HLB por interacciones hidrofóbicas."
         },
         "3. Lavado": {
             "color": "#74b9ff", "vol": 5, "solv": "Agua ultrapura (pH 3)",
             "tiempo": 3, "particulas": True, "flujo": True,
             "nivel_embudo": 0.75, "nivel_cartucho": 0.55,
-            "desc": "**Objetivo:** Eliminar sales, azúcares e interferencias hidrofílicas.\n\nLos analitos permanecen retenidos (●). Las interferencias (× grises) salen al vial de desperdicio."
+            "desc": "**Objetivo:** Eliminar sales e interferencias hidrofílicas.\n\nLos analitos (●) permanecen retenidos. Las interferencias (×) salen al vial de desperdicio."
         },
         "4. Secado": {
             "color": "#ecf0f1", "vol": 0, "solv": "Vacío fuerte (aire)",
             "tiempo": 12, "particulas": True, "flujo": False,
             "nivel_embudo": 0.0, "nivel_cartucho": 0.0,
-            "desc": "**Objetivo:** Eliminar TODA el agua residual (10-15 min).\n\n⚠️ Paso crítico: el agua residual diluiría el metanol de elución y reduciría la recuperación del analito."
+            "desc": "**Objetivo:** Eliminar TODA el agua residual (10-15 min).\n\n⚠️ Paso crítico: el agua diluiría el metanol de elución y reduciría la recuperación."
         },
         "5. Elución": {
             "color": "#00b894", "vol": 6, "solv": "Metanol + 2% NH₄OH",
             "tiempo": 4, "particulas": True, "flujo": True,
             "nivel_embudo": 0.70, "nivel_cartucho": 0.55,
-            "desc": f"**Objetivo:** Desorber {analito_spe} de la fase estacionaria.\n\nEl medio básico (NH₄OH) rompe las interacciones iónicas. Los analitos (●) salen hacia el vial colector."
+            "desc": f"**Objetivo:** Desorber {info_analito['abrev']} de la fase estacionaria.\n\nEl medio básico (NH₄OH) rompe las interacciones iónicas. Los analitos (●) salen hacia el vial colector."
         },
         "6. Concentración": {
             "color": "#e17055", "vol": 1, "solv": "Evaporación N₂ → 1 mL fase móvil",
             "tiempo": 10, "particulas": False, "flujo": False,
             "nivel_embudo": 0.15, "nivel_cartucho": 0.10,
-            "desc": "**Objetivo:** Concentrar 50-100x.\n\nEvaporar bajo N₂ suave a ≤30°C. Reconstituir en 1 mL de fase móvil inicial. Filtrar 0.22 µm antes de inyectar en el HPLC."
+            "desc": "**Objetivo:** Concentrar 50-100x.\n\nEvaporar bajo N₂ suave a ≤30°C. Reconstituir en 1 mL. Filtrar 0.22 µm antes de inyectar."
         }
     }
 
     def dibujar_escena_realista(paso, f, total_frames):
-        """Dibuja una escena realista de laboratorio con cartucho SPE"""
         d = INFO[paso]
         prog = f / max(total_frames - 1, 1)
         fig = go.Figure()
 
-        # === FONDO: Mesa de laboratorio ===
+        # Mesa de laboratorio
         fig.add_shape(type="rect", x0=0, y0=0, x1=1, y1=0.15,
                       fillcolor="#8b7355", opacity=0.3, line=dict(width=0))
-
-        # === MANIFOLD DE VACÍO (soporte superior) ===
+        # Manifold de vacío
         fig.add_shape(type="rect", x0=0.15, y0=0.88, x1=0.85, y1=0.95,
                       fillcolor="#6c757d", opacity=0.8, line=dict(color="#343a40", width=2))
-        # Puertos del manifold
         for x_port in [0.30, 0.50, 0.70]:
             fig.add_shape(type="rect", x0=x_port-0.02, y0=0.85, x1=x_port+0.02, y1=0.88,
                           fillcolor="#495057", opacity=0.9)
-
-        # === TUBO DE VACÍO ===
+        # Tubo de vacío
         fig.add_shape(type="line", x0=0.85, y0=0.92, x1=0.98, y1=0.92,
                       line=dict(color="#343a40", width=3))
         fig.add_annotation(x=0.98, y=0.92, text="🔌 Vacío", showarrow=False, font=dict(size=9))
 
-        # === CARTUCHO SPE (cilindro realista) ===
-        # Cuerpo del cartucho
+        # Cartucho SPE (cilindro)
         fig.add_shape(type="rect", x0=0.40, y0=0.30, x1=0.60, y1=0.85,
                       fillcolor="#f8f9fa", opacity=0.95, line=dict(color="#495057", width=2))
-        # Fase estacionaria (HLB - beige)
         fig.add_shape(type="rect", x0=0.42, y0=0.45, x1=0.58, y1=0.70,
                       fillcolor="#f5e6c8", opacity=0.9, line=dict(color="#b2bec3", width=1))
-        # Filtro superior (poroso)
         fig.add_shape(type="rect", x0=0.42, y0=0.70, x1=0.58, y1=0.72,
                       fillcolor="#adb5bd", opacity=0.7)
-        # Filtro inferior
         fig.add_shape(type="rect", x0=0.42, y0=0.43, x1=0.58, y1=0.45,
                       fillcolor="#adb5bd", opacity=0.7)
-        # Punta cónica inferior
-        fig.add_shape(type="path", path=f"M 0.40 0.43 L 0.60 0.43 L 0.52 0.38 L 0.48 0.38 Z",
+        fig.add_shape(type="path", path="M 0.40 0.43 L 0.60 0.43 L 0.52 0.38 L 0.48 0.38 Z",
                       fillcolor="#f8f9fa", line=dict(color="#495057", width=1.5))
-        # Etiqueta del cartucho
         fig.add_annotation(x=0.50, y=0.58, text="HLB<br>200mg", showarrow=False,
                            font=dict(size=9, color="#6c757d"))
 
-        # === EMBUDO SUPERIOR ===
-        fig.add_shape(type="path", path=f"M 0.30 0.85 L 0.70 0.85 L 0.62 0.90 L 0.38 0.90 Z",
+        # Embudo superior
+        fig.add_shape(type="path", path="M 0.30 0.85 L 0.70 0.85 L 0.62 0.90 L 0.38 0.90 Z",
                       fillcolor="#dee2e6", opacity=0.9, line=dict(color="#495057", width=1.5))
 
-        # === LÍQUIDO EN EL EMBUDO (baja con el progreso) ===
+        # Líquido en embudo
         if d["nivel_embudo"] > 0.05:
-            top_emb = d["nivel_embudo"]
-            bot_emb = 0.85
+            top_emb = d["nivel_embudo"]; bot_emb = 0.85
             y_liq_emb = top_emb - (top_emb - bot_emb) * prog
             if y_liq_emb > bot_emb + 0.01:
                 fig.add_shape(type="rect", x0=0.32, y0=bot_emb, x1=0.68, y1=y_liq_emb,
                               fillcolor=d["color"], opacity=0.7, line=dict(width=0))
 
-        # === LÍQUIDO EN EL CARTUCHO ===
+        # Líquido en cartucho
         if d["nivel_cartucho"] > 0.01:
-            top_cart = 0.70
-            bot_cart = 0.45
+            top_cart = 0.70; bot_cart = 0.45
             y_liq_cart = top_cart - (top_cart - bot_cart) * prog
             if y_liq_cart > bot_cart + 0.01:
                 fig.add_shape(type="rect", x0=0.42, y0=bot_cart, x1=0.58, y1=y_liq_cart,
                               fillcolor=d["color"], opacity=0.75, line=dict(width=0))
 
-        # === GOTAS CAYENDO (animación) ===
+        # Gotas cayendo
         if d["flujo"]:
-            n_gotas = 8
-            for i in range(n_gotas):
-                fase = (prog * 4 + i / n_gotas) % 1.0
-                # Gota en embudo → cartucho
+            for i in range(8):
+                fase = (prog * 4 + i / 8) % 1.0
                 if fase < 0.5:
-                    yg = 0.85 - fase * 2 * 0.40
-                    xg = 0.50 + np.sin(fase * 10) * 0.01
+                    yg = 0.85 - fase * 2 * 0.40; xg = 0.50 + np.sin(fase * 10) * 0.01
                 else:
-                    # Gota dentro del cartucho
-                    fase2 = (fase - 0.5) * 2
-                    yg = 0.45 - fase2 * 0.10
-                    xg = 0.50
+                    fase2 = (fase - 0.5) * 2; yg = 0.45 - fase2 * 0.10; xg = 0.50
                 if 0.25 < yg < 0.85:
-                    fig.add_trace(go.Scatter(
-                        x=[xg], y=[yg], mode="markers",
+                    fig.add_trace(go.Scatter(x=[xg], y=[yg], mode="markers",
                         marker=dict(size=8, color=d["color"], symbol="circle",
                                     line=dict(color="white", width=0.5)),
                         showlegend=False, opacity=0.9))
 
-        # === VIAL COLECTOR ===
-        # Cuerpo del vial
+        # Vial colector
         fig.add_shape(type="rect", x0=0.44, y0=0.10, x1=0.56, y1=0.35,
                       fillcolor="#ffffff", opacity=0.85, line=dict(color="#495057", width=1.5))
-        # Tapón del vial
         fig.add_shape(type="rect", x0=0.45, y0=0.35, x1=0.55, y1=0.37,
                       fillcolor="#2d3436", opacity=0.8)
-        # Líquido en el vial (crece en carga/lavado/elución)
         if paso in ("2. Carga de Muestra", "3. Lavado", "5. Elución"):
             vial_top = 0.10 + prog * 0.22
             fig.add_shape(type="rect", x0=0.44, y0=0.10, x1=0.56, y1=vial_top,
                           fillcolor=d["color"], opacity=0.8, line=dict(width=0))
-            # Menisco
             fig.add_shape(type="line", x0=0.44, y0=vial_top, x1=0.56, y1=vial_top,
                           line=dict(color="white", width=1.5))
 
-        # === PARTÍCULAS (ANALITOS) ===
+        # Partículas (analitos)
         if d["particulas"]:
             rng = np.random.default_rng(42)
-            xs = rng.uniform(0.43, 0.57, 25)
-            ys = rng.uniform(0.46, 0.69, 25)
-            
+            xs = rng.uniform(0.43, 0.57, 25); ys = rng.uniform(0.46, 0.69, 25)
             if paso == "2. Carga de Muestra":
-                # Caen desde el embudo hacia la fase
                 ys_now = np.maximum(0.46, ys + (1 - prog) * 0.40)
                 fig.add_trace(go.Scatter(x=xs, y=ys_now, mode="markers",
                     marker=dict(size=7, color=info_analito['color'], symbol="circle",
-                                line=dict(color="white", width=0.5)),
-                    showlegend=False))
+                                line=dict(color="white", width=0.5)), showlegend=False))
             elif paso == "3. Lavado":
-                # Analitos retenidos (fijos)
                 fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers",
                     marker=dict(size=7, color=info_analito['color'], symbol="circle",
-                                line=dict(color="white", width=0.5)),
-                    showlegend=False))
-                # Interferencias que salen (× grises)
-                xg = rng.uniform(0.43, 0.57, 12)
-                yg = 0.46 - prog * 0.35
+                                line=dict(color="white", width=0.5)), showlegend=False))
+                xg = rng.uniform(0.43, 0.57, 12); yg = 0.46 - prog * 0.35
                 fig.add_trace(go.Scatter(x=xg, y=[yg]*12, mode="markers",
                     marker=dict(size=5, color="#6c757d", symbol="x"),
                     showlegend=False, opacity=0.7))
             elif paso == "5. Elución":
-                # Analitos se desprenden y caen al vial
                 ys_now = ys - prog * 0.50
-                # Algunos ya están en el vial
                 en_vial = ys_now < 0.35
-                xs_vial = xs[en_vial]
-                ys_vial = 0.10 + rng.uniform(0.02, 0.20, en_vial.sum()) * prog
                 fig.add_trace(go.Scatter(x=xs[~en_vial], y=ys_now[~en_vial], mode="markers",
                     marker=dict(size=7, color=info_analito['color'], symbol="circle",
-                                line=dict(color="white", width=0.5)),
-                    showlegend=False))
-                if len(xs_vial) > 0:
-                    fig.add_trace(go.Scatter(x=xs_vial, y=ys_vial, mode="markers",
-                        marker=dict(size=7, color=info_analito['color'], symbol="circle",
-                                    line=dict(color="white", width=0.5)),
+                                line=dict(color="white", width=0.5)), showlegend=False))
+                if en_vial.sum() > 0:
+                    fig.add_trace(go.Scatter(x=xs[en_vial], y=0.10 + rng.uniform(0.02, 0.20, en_vial.sum()) * prog,
+                        mode="markers", marker=dict(size=7, color=info_analito['color'],
+                        symbol="circle", line=dict(color="white", width=0.5)),
                         showlegend=False, opacity=0.8))
             else:
                 fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers",
                     marker=dict(size=7, color=info_analito['color'], symbol="circle",
-                                line=dict(color="white", width=0.5)),
-                    showlegend=False))
+                                line=dict(color="white", width=0.5)), showlegend=False))
 
-        # === ETIQUETAS ===
-        fig.add_annotation(x=0.08, y=0.60, text="Manifold<br>de vacío", showarrow=False,
-                           font=dict(size=9, color="#495057"))
-        fig.add_annotation(x=0.50, y=0.58, text="Fase HLB", showarrow=False,
-                           font=dict(size=8, color="#6c757d"))
-        fig.add_annotation(x=0.75, y=0.50, text=f"Analito: {info_analito['abrev']}", showarrow=False,
-                           font=dict(size=10, color=info_analito['color']))
-        fig.add_annotation(x=0.75, y=0.20, text="Vial<br>colector", showarrow=False,
-                           font=dict(size=9, color="#495057"))
-
-        # Barra de título
+        # Etiquetas
+        fig.add_annotation(x=0.08, y=0.60, text="Manifold<br>de vacío", showarrow=False, font=dict(size=9, color="#495057"))
+        fig.add_annotation(x=0.75, y=0.50, text=f"Analito: {info_analito['abrev']}", showarrow=False, font=dict(size=10, color=info_analito['color']))
+        fig.add_annotation(x=0.75, y=0.20, text="Vial<br>colector", showarrow=False, font=dict(size=9, color="#495057"))
         fig.add_annotation(x=0.50, y=0.98,
             text=f"<b>{paso}</b>  |  {d['solv']}  |  Vol: {d['vol']*(1-prog):.1f} mL  |  Tiempo: ~{d['tiempo']} min",
-            showarrow=False, font=dict(size=11),
-            bgcolor="#fff3cd", bordercolor="#e17055", borderwidth=2)
+            showarrow=False, font=dict(size=11), bgcolor="#fff3cd", bordercolor="#e17055", borderwidth=2)
 
-        fig.update_layout(
-            xaxis=dict(visible=False, range=[0, 1]),
-            yaxis=dict(visible=False, range=[0, 1]),
-            height=550, margin=dict(l=20, r=20, t=40, b=20),
-            plot_bgcolor="#f8f9fa", paper_bgcolor="white"
-        )
+        fig.update_layout(xaxis=dict(visible=False, range=[0, 1]),
+                          yaxis=dict(visible=False, range=[0, 1]),
+                          height=550, margin=dict(l=20, r=20, t=40, b=20),
+                          plot_bgcolor="#f8f9fa", paper_bgcolor="white")
         return fig
 
     # MODO AUTOMÁTICO
@@ -377,8 +342,7 @@ elif seccion == "🎬 SPE Realista":
         updatemenus=[dict(type="buttons", x=0.02, y=1.05, buttons=[
             dict(label="▶️ Reproducir", method="animate",
                  args=[None, dict(frame=dict(duration=1000//fps), fromcurrent=True)]),
-            dict(label="⏸️ Pausar", method="animate",
-                 args=[[None], dict(mode="immediate")])
+            dict(label="⏸️ Pausar", method="animate", args=[[None], dict(mode="immediate")])
         ])]
     ))
     st.plotly_chart(fig_anim, width="stretch")
@@ -386,12 +350,9 @@ elif seccion == "🎬 SPE Realista":
 
     # MODO MANUAL
     st.subheader("🎮 Modo Manual")
-    if "frame_manual" not in st.session_state:
-        st.session_state.frame_manual = 0
-    if "paso_manual" not in st.session_state:
-        st.session_state.paso_manual = 0
-    if "play" not in st.session_state:
-        st.session_state.play = False
+    if "frame_manual" not in st.session_state: st.session_state.frame_manual = 0
+    if "paso_manual" not in st.session_state: st.session_state.paso_manual = 0
+    if "play" not in st.session_state: st.session_state.play = False
 
     paso_sel = st.select_slider("Paso actual:", options=list(range(6)),
         value=st.session_state.paso_manual, format_func=lambda i: PASOS[i], key="sel_paso_manual")
@@ -415,8 +376,7 @@ elif seccion == "🎬 SPE Realista":
     def _render_manual():
         if st.session_state.play:
             st.session_state.frame_manual = (st.session_state.frame_manual + 1) % 60
-        fig = dibujar_escena_realista(PASOS[st.session_state.paso_manual],
-                                       st.session_state.frame_manual, 60)
+        fig = dibujar_escena_realista(PASOS[st.session_state.paso_manual], st.session_state.frame_manual, 60)
         st.plotly_chart(fig, width="stretch", key=f"man_{st.session_state.frame_manual}")
 
     _render_manual()
@@ -434,7 +394,7 @@ elif seccion == "📊 Cromatograma Multi":
     analitos_seleccionados = []
     for i, (nombre, info) in enumerate(ANALITOS.items()):
         with cols_analitos[i]:
-            checked = st.checkbox(f"● {nombre}", value=(i==0), key=f"chk_{nombre}")
+            checked = st.checkbox(f"● {nombre}", value=(i == 0), key=f"chk_{nombre}")
             if checked:
                 analitos_seleccionados.append(nombre)
 
@@ -454,48 +414,34 @@ elif seccion == "📊 Cromatograma Multi":
     for nombre in analitos_seleccionados:
         info = ANALITOS[nombre]
         sigma = info['sigma_base'] / resolucion
-        # Simular concentración relativa según analito
         factor_conc = concentracion * (0.5 if info['f_excrecion'] < 0.1 else 1.0)
         pico = factor_conc * np.exp(-((tiempo - info['t_r']) ** 2) / (2 * sigma ** 2))
         senal_total += pico
-        area = trapz(pico, tiempo)
-        areas_resultados[nombre] = area
-
+        areas_resultados[nombre] = trapz(pico, tiempo)
         fig.add_trace(go.Scatter(x=tiempo, y=pico + 5, mode='lines',
-            name=f"{info['abrev']} (t_R={info['t_r']} min)",
-            line=dict(color=info['color'], width=2)))
-        fig.add_trace(go.Scatter(x=[info['t_r']], y=[pico.max() + 5],
-            mode='markers+text', marker=dict(size=10, color=info['color']),
-            text=[info['abrev']], textposition='top center', showlegend=False))
+            name=f"{info['abrev']} (t_R={info['t_r']} min)", line=dict(color=info['color'], width=2)))
+        fig.add_trace(go.Scatter(x=[info['t_r']], y=[pico.max() + 5], mode='markers+text',
+            marker=dict(size=10, color=info['color']), text=[info['abrev']],
+            textposition='top center', showlegend=False))
 
     fig.add_trace(go.Scatter(x=tiempo, y=senal_total, mode='lines',
         name='Cromatograma total', line=dict(color='black', width=2.5)))
-
-    fig.update_layout(
-        title='Cromatograma Multi-Analito Simulado',
-        xaxis_title='Tiempo de Retención (min)',
-        yaxis_title='Intensidad de Señal (u.a.)',
-        template='plotly_white', height=500, showlegend=True
-    )
+    fig.update_layout(title='Cromatograma Multi-Analito Simulado',
+        xaxis_title='Tiempo de Retención (min)', yaxis_title='Intensidad de Señal (u.a.)',
+        template='plotly_white', height=500, showlegend=True)
     st.plotly_chart(fig, width="stretch")
 
-    # Tabla de resultados
     if areas_resultados:
         st.markdown("### 📈 Áreas de Picos Calculadas")
         df_areas = pd.DataFrame([
             {"Analito": n, "Abrev.": ANALITOS[n]['abrev'], "t_R (min)": ANALITOS[n]['t_r'],
-             "Área (u.a.·min)": areas_resultados[n], "Color": "●"}
+             "Área (u.a.·min)": areas_resultados[n]}
             for n in analitos_seleccionados
         ])
         st.dataframe(df_areas, width="stretch")
-
-        # Guardar en resultados de práctica
         st.session_state.resultados_practica['cromatograma'] = {
-            'analitos': analitos_seleccionados,
-            'areas': areas_resultados,
-            'concentracion': concentracion,
-            'ruido': ruido,
-            'resolucion': resolucion
+            'analitos': analitos_seleccionados, 'areas': areas_resultados,
+            'concentracion': concentracion, 'ruido': ruido, 'resolucion': resolucion
         }
 
 # ============================================================================
@@ -509,9 +455,7 @@ elif seccion == "📈 Calibración":
         st.subheader("📥 Datos de Calibración")
         datos_texto = st.text_area(
             "Concentración (ng/mL), Área del pico",
-            "10, 1500\n50, 7200\n100, 14500\n250, 36000\n500, 71000",
-            height=200
-        )
+            "10, 1500\n50, 7200\n100, 14500\n250, 36000\n500, 71000", height=200)
     with col2:
         st.subheader("📊 Parámetros de Incertidumbre")
         u_rep = st.number_input("Incertidumbre por repetibilidad (%)", 0.0, 20.0, 5.0, 0.1)
@@ -528,9 +472,9 @@ elif seccion == "📈 Calibración":
             conc, areas = np.array(conc), np.array(areas)
 
             slope, intercept, r_value, p_value, std_err = stats.linregress(conc, areas)
-            r_squared = r_value**2
+            r_squared = r_value ** 2
             u_cal = (std_err / np.mean(areas)) * 100
-            u_comb = np.sqrt(u_cal**2 + u_rep**2 + u_vol**2)
+            u_comb = np.sqrt(u_cal ** 2 + u_rep ** 2 + u_vol ** 2)
             u_expandida = k * u_comb
 
             st.success(f"✅ Ecuación: $y = {slope:.2f}x + {intercept:.2f}$ | $R^2 = {r_squared:.4f}$")
@@ -538,8 +482,8 @@ elif seccion == "📈 Calibración":
             fig_cal = go.Figure()
             fig_cal.add_trace(go.Scatter(x=conc, y=areas, mode='markers', name='Experimental',
                 marker=dict(size=10, color='red')))
-            x_fit = np.linspace(0, max(conc)*1.1, 100)
-            fig_cal.add_trace(go.Scatter(x=x_fit, y=slope*x_fit + intercept, mode='lines',
+            x_fit = np.linspace(0, max(conc) * 1.1, 100)
+            fig_cal.add_trace(go.Scatter(x=x_fit, y=slope * x_fit + intercept, mode='lines',
                 name=f'Ajuste (R²={r_squared:.4f})', line=dict(color='blue')))
             fig_cal.update_layout(title='Curva de Calibración', xaxis_title='Concentración (ng/mL)',
                 yaxis_title='Área', template='plotly_white')
@@ -668,7 +612,7 @@ elif seccion == "🌍 Epidemiología":
     st.markdown("### 🇨🇴 Comparación con Estudios en Colombia")
     datos_col = {
         "Ciudad": ["Medellín (San Fernando)", "Bogotá (Salitre)", "Pereira", "Armenia", "Manizales", "👉 Tu Muestra"],
-        "Carga BE": [4000, 900, 4857, 2988, 645, consumo if info_epi['abrev']=='BE' else consumo*0.5]
+        "Carga BE": [4000, 900, 4857, 2988, 645, consumo if info_epi['abrev'] == 'BE' else consumo * 0.5]
     }
     df_comp = pd.DataFrame(datos_col)
     fig_comp = px.bar(df_comp, x="Ciudad", y="Carga BE", color="Ciudad",
@@ -692,10 +636,11 @@ elif seccion == "📄 Reporte PDF":
         grupo = st.text_input("Grupo:", "A1")
         fecha_practica = st.date_input("Fecha de práctica:", datetime.now())
     with col2:
-        titulo_reporte = st.text_input("Título de la práctica:", "Detección de Psicoactivos en Aguas Residuales por WBE")
-        observaciones = st.text_area("Observaciones:", "Práctica realizada en condiciones de laboratorio simulado.", height=100)
+        titulo_reporte = st.text_input("Título de la práctica:",
+            "Detección de Psicoactivos en Aguas Residuales por WBE")
+        observaciones = st.text_area("Observaciones:",
+            "Práctica realizada en condiciones de laboratorio simulado.", height=100)
 
-    # Resumen de resultados disponibles
     st.markdown("### 📊 Resultados disponibles para el reporte")
     res = st.session_state.resultados_practica
     cols_res = st.columns(3)
@@ -714,29 +659,22 @@ elif seccion == "📄 Reporte PDF":
 
     if st.button("📄 Generar y Descargar Reporte PDF", type="primary"):
         try:
-            # Crear gráfico de calibración para el PDF
+            # Gráfico de calibración
             fig_cal_img = None
             if 'calibracion' in res:
                 fig, ax = plt.subplots(figsize=(8, 5))
-                # Datos de ejemplo para la curva (si no hay datos reales, usar genéricos)
                 conc_ej = np.array([10, 50, 100, 250, 500])
                 areas_ej = res['calibracion']['pendiente'] * conc_ej + res['calibracion']['intercepto']
                 ax.scatter(conc_ej, areas_ej, color='red', s=80, zorder=5, label='Puntos experimentales')
                 x_fit = np.linspace(0, 550, 100)
-                ax.plot(x_fit, res['calibracion']['pendiente']*x_fit + res['calibracion']['intercepto'],
-                    'b-', linewidth=2, label=f"Ajuste lineal (R²={res['calibracion']['r2']:.4f})")
-                ax.set_xlabel('Concentración (ng/mL)')
-                ax.set_ylabel('Área del pico (u.a.)')
-                ax.set_title('Curva de Calibración')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
-                buf = io.BytesIO()
-                fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-                buf.seek(0)
-                fig_cal_img = buf.read()
-                plt.close(fig)
+                ax.plot(x_fit, res['calibracion']['pendiente'] * x_fit + res['calibracion']['intercepto'],
+                        'b-', linewidth=2, label=f"Ajuste lineal (R²={res['calibracion']['r2']:.4f})")
+                ax.set_xlabel('Concentración (ng/mL)'); ax.set_ylabel('Área del pico (u.a.)')
+                ax.set_title('Curva de Calibración'); ax.legend(); ax.grid(True, alpha=0.3)
+                buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                buf.seek(0); fig_cal_img = buf.getvalue(); plt.close(fig)
 
-            # Crear gráfico de epidemiología
+            # Gráfico de epidemiología
             fig_epi_img = None
             if 'epidemiologia' in res:
                 fig, ax = plt.subplots(figsize=(8, 5))
@@ -749,147 +687,133 @@ elif seccion == "📄 Reporte PDF":
                 ax.tick_params(axis='x', rotation=45)
                 for bar, val in zip(bars, cargas):
                     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 50,
-                        f'{val:.0f}', ha='center', va='bottom', fontsize=9)
-                buf2 = io.BytesIO()
-                fig.savefig(buf2, format='png', dpi=150, bbox_inches='tight')
-                buf2.seek(0)
-                fig_epi_img = buf2.read()
-                plt.close(fig)
+                            f'{val:.0f}', ha='center', va='bottom', fontsize=9)
+                buf2 = io.BytesIO(); fig.savefig(buf2, format='png', dpi=150, bbox_inches='tight')
+                buf2.seek(0); fig_epi_img = buf2.getvalue(); plt.close(fig)
 
-            # Generar PDF con fpdf2
+            # PDF
             pdf = FPDF()
             pdf.set_auto_page_break(auto=True, margin=15)
 
-            # Portada
             pdf.add_page()
             pdf.set_font("Helvetica", "B", 22)
-            pdf.cell(0, 15, "REPORTE DE PRÁCTICA DE LABORATORIO", ln=True, align='C')
+            _cell(pdf, 0, 15, "REPORTE DE PRÁCTICA DE LABORATORIO", align='C')
             pdf.ln(5)
             pdf.set_font("Helvetica", "", 14)
-            pdf.cell(0, 10, titulo_reporte, ln=True, align='C')
+            _cell(pdf, 0, 10, titulo_reporte, align='C')
             pdf.ln(10)
             pdf.set_font("Helvetica", "", 12)
-            pdf.cell(0, 8, f"Universidad de Antioquia", ln=True, align='C')
-            pdf.cell(0, 8, "Facultad de Ciencias Exactas y Naturales", ln=True, align='C')
-            pdf.cell(0, 8, "Programa de Química / Ingeniería Ambiental", ln=True, align='C')
+            _cell(pdf, 0, 8, "Universidad de Antioquia", align='C')
+            _cell(pdf, 0, 8, "Facultad de Ciencias Exactas y Naturales", align='C')
+            _cell(pdf, 0, 8, "Programa de Química / Ingeniería Ambiental", align='C')
             pdf.ln(15)
 
-            # Información del estudiante
             pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, "INFORMACIÓN DEL ESTUDIANTE", ln=True)
+            _cell(pdf, 0, 8, "INFORMACIÓN DEL ESTUDIANTE")
             pdf.set_font("Helvetica", "", 11)
-            pdf.cell(95, 7, f"Nombre: {nombre_estudiante}", ln=False)
-            pdf.cell(95, 7, f"Código: {codigo}", ln=True)
-            pdf.cell(95, 7, f"Grupo: {grupo}", ln=False)
-            pdf.cell(95, 7, f"Fecha: {fecha_practica.strftime('%d/%m/%Y')}", ln=True)
+            _cell(pdf, 95, 7, f"Nombre: {nombre_estudiante}", ln=False)
+            _cell(pdf, 95, 7, f"Código: {codigo}")
+            _cell(pdf, 95, 7, f"Grupo: {grupo}", ln=False)
+            _cell(pdf, 95, 7, f"Fecha: {fecha_practica.strftime('%d/%m/%Y')}")
             pdf.ln(5)
 
-            # Configuración de laboratorio
             pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, "CONFIGURACIÓN DE LABORATORIO", ln=True)
+            _cell(pdf, 0, 8, "CONFIGURACIÓN DE LABORATORIO")
             pdf.set_font("Helvetica", "", 11)
-            pdf.cell(0, 7, f"Equipo cromatográfico: {hplc_brand}", ln=True)
-            pdf.cell(0, 7, f"Cartucho SPE: {spe_cartridge}", ln=True)
+            _cell(pdf, 0, 7, f"Equipo cromatográfico: {hplc_brand}")
+            _cell(pdf, 0, 7, f"Cartucho SPE: {spe_cartridge}")
             pdf.ln(5)
 
-            # Cromatograma
             if 'cromatograma' in res:
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 14)
-                pdf.cell(0, 10, "1. ANÁLISIS CROMATOGRÁFICO", ln=True)
+                _cell(pdf, 0, 10, "1. ANÁLISIS CROMATOGRÁFICO")
                 pdf.set_font("Helvetica", "", 11)
-                pdf.cell(0, 7, f"Analitos simulados: {', '.join(res['cromatograma']['analitos'])}", ln=True)
-                pdf.cell(0, 7, f"Concentración base: {res['cromatograma']['concentracion']} ng/mL", ln=True)
-                pdf.cell(0, 7, f"Resolución: {res['cromatograma']['resolucion']} | Ruido: {res['cromatograma']['ruido']}", ln=True)
+                _cell(pdf, 0, 7, f"Analitos simulados: {', '.join(res['cromatograma']['analitos'])}")
+                _cell(pdf, 0, 7, f"Concentración base: {res['cromatograma']['concentracion']} ng/mL")
+                _cell(pdf, 0, 7, f"Resolución: {res['cromatograma']['resolucion']} | Ruido: {res['cromatograma']['ruido']}")
                 pdf.ln(5)
-
                 pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(0, 8, "Áreas de picos calculadas:", ln=True)
+                _cell(pdf, 0, 8, "Áreas de picos calculadas:")
                 pdf.set_font("Helvetica", "", 10)
-                pdf.cell(60, 7, "Analito", border=1)
-                pdf.cell(40, 7, "Abrev.", border=1)
-                pdf.cell(40, 7, "t_R (min)", border=1)
-                pdf.cell(50, 7, "Área (u.a.·min)", border=1, ln=True)
+                _cell(pdf, 60, 7, "Analito", border=1, ln=False)
+                _cell(pdf, 40, 7, "Abrev.", border=1, ln=False)
+                _cell(pdf, 40, 7, "t_R (min)", border=1, ln=False)
+                _cell(pdf, 50, 7, "Área (u.a.·min)", border=1)
                 for nombre in res['cromatograma']['analitos']:
                     info = ANALITOS[nombre]
-                    pdf.cell(60, 7, nombre, border=1)
-                    pdf.cell(40, 7, info['abrev'], border=1)
-                    pdf.cell(40, 7, str(info['t_r']), border=1)
-                    pdf.cell(50, 7, f"{res['cromatograma']['areas'][nombre]:.2f}", border=1, ln=True)
+                    _cell(pdf, 60, 7, nombre, border=1, ln=False)
+                    _cell(pdf, 40, 7, info['abrev'], border=1, ln=False)
+                    _cell(pdf, 40, 7, str(info['t_r']), border=1, ln=False)
+                    _cell(pdf, 50, 7, f"{res['cromatograma']['areas'][nombre]:.2f}", border=1)
 
-            # Calibración
             if 'calibracion' in res:
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 14)
-                pdf.cell(0, 10, "2. CURVA DE CALIBRACIÓN E INCERTIDUMBRE", ln=True)
+                _cell(pdf, 0, 10, "2. CURVA DE CALIBRACIÓN E INCERTIDUMBRE")
                 pdf.set_font("Helvetica", "", 11)
                 cal = res['calibracion']
-                pdf.cell(0, 7, f"Ecuación: y = {cal['pendiente']:.2f}x + {cal['intercepto']:.2f}", ln=True)
-                pdf.cell(0, 7, f"Coeficiente de determinación (R²): {cal['r2']:.4f}", ln=True)
-                pdf.cell(0, 7, f"Error estándar de la pendiente: {cal['std_err']:.2f}", ln=True)
+                _cell(pdf, 0, 7, f"Ecuación: y = {cal['pendiente']:.2f}x + {cal['intercepto']:.2f}")
+                _cell(pdf, 0, 7, f"Coeficiente de determinación (R²): {cal['r2']:.4f}")
+                _cell(pdf, 0, 7, f"Error estándar de la pendiente: {cal['std_err']:.2f}")
                 pdf.ln(3)
                 pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(0, 8, "Análisis de Incertidumbre:", ln=True)
+                _cell(pdf, 0, 8, "Análisis de Incertidumbre:")
                 pdf.set_font("Helvetica", "", 11)
-                pdf.cell(0, 7, f"Incertidumbre combinada (uc): {cal['u_comb']:.2f}%", ln=True)
-                pdf.cell(0, 7, f"Factor de cobertura (k): {cal['k']}", ln=True)
-                pdf.cell(0, 7, f"Incertidumbre expandida (U): {cal['u_expandida']:.2f}%", ln=True)
-
-                # Insertar imagen de calibración
+                _cell(pdf, 0, 7, f"Incertidumbre combinada (uc): {cal['u_comb']:.2f}%")
+                _cell(pdf, 0, 7, f"Factor de cobertura (k): {cal['k']}")
+                _cell(pdf, 0, 7, f"Incertidumbre expandida (U): {cal['u_expandida']:.2f}%")
                 if fig_cal_img:
                     pdf.ln(5)
-                    pdf.image(fig_cal_img, x=10, w=190)
+                    pdf.image(io.BytesIO(fig_cal_img), x=10, w=190)
 
-            # Epidemiología
             if 'epidemiologia' in res:
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 14)
-                pdf.cell(0, 10, "3. RETROCÁLCOLO EPIDEMIOLÓGICO", ln=True)
+                _cell(pdf, 0, 10, "3. RETROCÁLCULO EPIDEMIOLÓGICO")
                 pdf.set_font("Helvetica", "", 11)
                 epi = res['epidemiologia']
-                pdf.cell(0, 7, f"Analito: {epi['analito']} ({epi['abrev']})", ln=True)
-                pdf.cell(0, 7, f"Carga másica normalizada: {epi['consumo']:.2f} mg/día/1000 hab", ln=True)
-                pdf.cell(0, 7, f"Carga diaria total: {epi['carga_diaria']:.2f} mg/día", ln=True)
-                pdf.cell(0, 7, f"Nivel de consumo estimado: {epi['nivel']}", ln=True)
+                _cell(pdf, 0, 7, f"Analito: {epi['analito']} ({epi['abrev']})")
+                _cell(pdf, 0, 7, f"Carga másica normalizada: {epi['consumo']:.2f} mg/día/1000 hab")
+                _cell(pdf, 0, 7, f"Carga diaria total: {epi['carga_diaria']:.2f} mg/día")
+                _cell(pdf, 0, 7, f"Nivel de consumo estimado: {epi['nivel']}")
                 pdf.ln(5)
-
                 pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(0, 8, "Fórmula aplicada (EMCDDA):", ln=True)
+                _cell(pdf, 0, 8, "Fórmula aplicada (EMCDDA):")
                 pdf.set_font("Helvetica", "", 10)
-                pdf.cell(0, 7, "Consumo = (C_agua × Q × 1000) / (P × f_excreción)", ln=True)
+                _cell(pdf, 0, 7, "Consumo = (C_agua x Q x 1000) / (P x f_excrecion)")
                 pdf.ln(3)
-
                 if fig_epi_img:
-                    pdf.image(fig_epi_img, x=10, w=190)
+                    pdf.image(io.BytesIO(fig_epi_img), x=10, w=190)
 
-            # Observaciones
             pdf.add_page()
             pdf.set_font("Helvetica", "B", 14)
-            pdf.cell(0, 10, "4. OBSERVACIONES Y CONCLUSIONES", ln=True)
+            _cell(pdf, 0, 10, "4. OBSERVACIONES Y CONCLUSIONES")
             pdf.set_font("Helvetica", "", 11)
             pdf.multi_cell(0, 6, observaciones)
             pdf.ln(10)
 
-            # Referencias
             pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, "REFERENCIAS", ln=True)
+            _cell(pdf, 0, 8, "REFERENCIAS")
             pdf.set_font("Helvetica", "", 10)
             refs = [
                 "- EMCDDA. Technical guidelines for wastewater analysis.",
-                "- Ruiz Montilla et al. (2022). Estudio WBE Medellín. Universidad de Caldas.",
+                "- Ruiz Montilla et al. (2022). Estudio WBE Medellin. Universidad de Caldas.",
                 "- Bijlsma et al. (2016). Wastewater-based epidemiology in Colombia.",
                 "- NTC-ISO 5667-3 (Muestreo de aguas)."
             ]
             for r in refs:
-                pdf.cell(0, 6, r, ln=True)
+                _cell(pdf, 0, 6, r)
 
-            # Pie de página
             pdf.ln(10)
             pdf.set_font("Helvetica", "I", 9)
-            pdf.cell(0, 6, f"Reporte generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} | Simulador WBE v3.0 - Universidad de Antioquia", ln=True, align='C')
+            _cell(pdf, 0, 6,
+                  f"Reporte generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} | Simulador WBE v3.0 - Universidad de Antioquia",
+                  align='C')
 
-            # Descargar
-            pdf_bytes = pdf.output()
+            # FIX CRÍTICO: bytearray -> bytes
+            pdf_bytes = bytes(pdf.output())
+
             st.download_button(
                 label="⬇️ Descargar Reporte PDF",
                 data=pdf_bytes,
